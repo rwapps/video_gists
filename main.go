@@ -19,10 +19,10 @@ import (
 // Config contains the site configuration.
 type Config struct {
 	//GistToken string `json:"GistToken"`
-	YoutubeApiKey string `json:"YoutubeApiKey"`
-	Lists         []List `json:"Lists"`
-	GithubToken   string `json:"GithubToken"`
-  Categories    []string `json:"Categories"`
+	YoutubeApiKey string   `json:"YoutubeApiKey"`
+	Lists         []List   `json:"Lists"`
+	GithubToken   string   `json:"GithubToken"`
+	Categories    []string `json:"Categories"`
 }
 
 type List struct {
@@ -144,8 +144,17 @@ var currentSha string
 
 var parentCommit string
 
-
 func backupOrgPlaylists(category string, body []byte) {
+
+	tree := CommitTree{}
+	tree.BaseTree = currentSha
+
+	blobTree := Tree{}
+	blobTree.Sha = createBlob(string(body))
+	blobTree.Path = fmt.Sprintf("%s/playlist.json", category)
+	blobTree.Type = "blob"
+	blobTree.Mode = "100644"
+	tree.Trees = append(tree.Trees, blobTree)
 
 	var playlists map[string]OrgPlaylist
 	err := json.Unmarshal(body, &playlists)
@@ -153,6 +162,7 @@ func backupOrgPlaylists(category string, body []byte) {
 		fmt.Printf("failed to unmarshal body %v\n", body)
 	}
 	for _, p := range playlists {
+		blobTree = Tree{}
 		videoList = videoList[:0]
 		videos = videos[:0]
 		videos = getVideos(p.Id, "")
@@ -165,62 +175,70 @@ func backupOrgPlaylists(category string, body []byte) {
 		if strings.Contains(p.Title, "/") {
 			p.Title = strings.Replace(p.Title, "/", "-", -1)
 		}
-		err = ioutil.WriteFile(fmt.Sprintf("data/%s/%s.json", category, p.Title), []byte(output), 0644)
-		if err != nil {
-			fmt.Printf("failed to write file %s\n", err)
-		}
+
+		blobTree.Sha = createBlob(output)
+		blobTree.Path = fmt.Sprintf("%s/%s.json", category, p.Title)
+		blobTree.Type = "blob"
+		blobTree.Mode = "100644"
+
+		tree.Trees = append(tree.Trees, blobTree)
 	}
+	// create a tree, grab the sha
+	treeJson, err := json.Marshal(tree)
+	if err != nil {
+		fmt.Printf("failed to marshal tree %s\n", err)
+	}
+	body = githubRequest("POST", "https://api.github.com/repos/rwapps/video_backups/git/trees", "201 Created", treeJson)
+
+	treeResult := Sha{}
+	if err := json.Unmarshal(body, &treeResult); err != nil {
+		fmt.Printf("failed to decode resp.Body %s\n", err)
+	}
+
+	// New commit
+	payload := fmt.Sprintf("{ \"message\": \"updating %s\", \"tree\": %q, \"parents\": [ %q ] }", category, treeResult.Sha, parentCommit)
+	body = githubRequest("POST", "https://api.github.com/repos/rwapps/video_backups/git/commits", "201 Created", []byte(payload))
+
+	commitResult := Sha{}
+	if err := json.Unmarshal(body, &commitResult); err != nil {
+		fmt.Printf("failed to decode resp.Body %s\n", err)
+	}
+
+	payload = fmt.Sprintf("{ \"sha\": %q, \"force\": true }", commitResult.Sha)
+	body = githubRequest("PATCH", "https://api.github.com/repos/rwapps/video_backups/git/refs/heads/master", "200 OK", []byte(payload))
+
+	updateResult := GithubRefResult{}
+	if err := json.Unmarshal(body, &updateResult); err != nil {
+		fmt.Printf("failed to decode resp.Body %s\n", err)
+	}
+
+	fmt.Printf("updateResult %v\n", updateResult)
 }
 
 func createBlob(content string) string {
-		// create a blob, grab the sha
-		payload := fmt.Sprintf("{ \"content\": %q, \"encoding\": \"utf-8\" }", content)
-		req, err := http.NewRequest("POST", "https://api.github.com/repos/rwapps/video_backups/git/blobs", bytes.NewBuffer([]byte(payload)))
+	payload := fmt.Sprintf("{ \"content\": %q, \"encoding\": \"utf-8\" }", content)
+	body := githubRequest("POST", "https://api.github.com/repos/rwapps/video_backups/git/blobs", "201 Created", []byte(payload))
 
-		if err != nil {
-			log.Fatal("Cannot make post for blob.")
-		}
-		req.Header.Set("Authorization", "token "+config.GithubToken)
+	blobResult := Sha{}
+	if err := json.Unmarshal(body, &blobResult); err != nil {
+		fmt.Printf("failed to decode resp.Body %s\n", err)
+	}
 
-		client := &http.Client{}
-		resp, err := client.Do(req)
-		if err != nil {
-			log.Fatal("Cannot post blob.")
-		}
-		defer resp.Body.Close()
-		body, err := ioutil.ReadAll(resp.Body)
-		if err != nil {
-			fmt.Println("failed to readall body")
-		}
-
-		if resp.Status == "201 Created" {
-			fmt.Println("Success")
-		} else {
-			// TODO: fail here.
-			fmt.Printf("Failed posting blob, error body\n %s\n", body)
-		}
-
-		blobResult := Sha{}
-		if err := json.Unmarshal(body, &blobResult); err != nil {
-			fmt.Printf("failed to decode resp.Body %s\n", err)
-		}
-
-		return blobResult.Sha
-
+	return blobResult.Sha
 }
 
 func backupPlaylists(category string, body []byte) {
-  // TODO - do this for organizations too
+	// TODO - do this for organizations too
 
-  tree := CommitTree{}
-  tree.BaseTree = currentSha
+	tree := CommitTree{}
+	tree.BaseTree = currentSha
 
-  blobTree := Tree{}
-  blobTree.Sha = createBlob(string(body))
-  blobTree.Path = fmt.Sprintf("%s/playlist.json", category)
-  blobTree.Type = "blob"
-  blobTree.Mode = "100644"
-  tree.Trees = append(tree.Trees, blobTree)
+	blobTree := Tree{}
+	blobTree.Sha = createBlob(string(body))
+	blobTree.Path = fmt.Sprintf("%s/playlist.json", category)
+	blobTree.Type = "blob"
+	blobTree.Mode = "100644"
+	tree.Trees = append(tree.Trees, blobTree)
 
 	var playlists []Playlist
 	err := json.Unmarshal(body, &playlists)
@@ -248,38 +266,13 @@ func backupPlaylists(category string, body []byte) {
 		blobTree.Mode = "100644"
 
 		tree.Trees = append(tree.Trees, blobTree)
-
-		//err = ioutil.WriteFile(fmt.Sprintf("data/%s/%s.json", category, p.Title), []byte(output), 0644)
-		//if err != nil {
-		//	fmt.Printf("failed to write file %s\n", err)
-		//}
 	}
 	// create a tree, grab the sha
 	treeJson, err := json.Marshal(tree)
 	if err != nil {
 		fmt.Printf("failed to marshal tree %s\n", err)
 	}
-	req, err := http.NewRequest("POST", "https://api.github.com/repos/rwapps/video_backups/git/trees", bytes.NewBuffer(treeJson))
-	if err != nil {
-		log.Fatal("Cannot make post for tree.")
-	}
-	req.Header.Set("Authorization", "token "+config.GithubToken)
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		log.Fatal("Cannot create tree.")
-	}
-	defer resp.Body.Close()
-	body, err = ioutil.ReadAll(resp.Body)
-	if err != nil {
-		fmt.Println("failed to readall body")
-	}
-	if resp.Status == "201 Created" {
-		fmt.Println("Success")
-	} else {
-		// TODO: fail here.
-		fmt.Printf("Failed creating tree, error body\n %s\n", body)
-	}
+	body = githubRequest("POST", "https://api.github.com/repos/rwapps/video_backups/git/trees", "201 Created", treeJson)
 
 	treeResult := Sha{}
 	if err := json.Unmarshal(body, &treeResult); err != nil {
@@ -287,66 +280,17 @@ func backupPlaylists(category string, body []byte) {
 	}
 
 	// New commit
-	fmt.Println(treeResult.Sha)
 	payload := fmt.Sprintf("{ \"message\": \"updating %s\", \"tree\": %q, \"parents\": [ %q ] }", category, treeResult.Sha, parentCommit)
-	req, err = http.NewRequest("POST", "https://api.github.com/repos/rwapps/video_backups/git/commits", bytes.NewBuffer([]byte(payload)))
-
-	if err != nil {
-		log.Fatal("Cannot make post for commit.")
-	}
-	req.Header.Set("Authorization", "token "+config.GithubToken)
-
-	client = &http.Client{}
-	resp, err = client.Do(req)
-	if err != nil {
-		log.Fatal("Cannot post commit.")
-	}
-	defer resp.Body.Close()
-	body, err = ioutil.ReadAll(resp.Body)
-	if err != nil {
-		fmt.Println("failed to readall body")
-	}
-
-	if resp.Status == "201 Created" {
-		fmt.Println("Success")
-	} else {
-		// TODO: fail here.
-		fmt.Printf("Failed posting commit, error body\n %s\n", body)
-	}
+	body = githubRequest("POST", "https://api.github.com/repos/rwapps/video_backups/git/commits", "201 Created", []byte(payload))
 
 	commitResult := Sha{}
 	if err := json.Unmarshal(body, &commitResult); err != nil {
 		fmt.Printf("failed to decode resp.Body %s\n", err)
 	}
 
-	fmt.Println(commitResult.Sha)
-
-	// Update head
-	payload = fmt.Sprintf("{ \"sha\": %q }", commitResult.Sha)
-  body = githubRequest("PATCH",  "https://api.github.com/repos/rwapps/video_backups/git/refs/heads/master", "200 OK", []byte(payload))
-	// req, err = http.NewRequest("PATCH", "https://api.github.com/repos/rwapps/video_backups/git/refs/heads/master", bytes.NewBuffer([]byte(payload)))
-
-	// if err != nil {
-	// 	log.Fatal("Cannot make patch for update.")
-	// }
-	// req.Header.Set("Authorization", "token "+config.GithubToken)
-
-	// client = &http.Client{}
-	// resp, err = client.Do(req)
-	// if err != nil {
-	// 	log.Fatal("Cannot post commit.")
-	// }
-	// defer resp.Body.Close()
-	// body, err = ioutil.ReadAll(resp.Body)
-	// if err != nil {
-	// 	fmt.Println("failed to readall body")
-	// }
-
-	// if resp.Status == "200 OK" {
-	// 	fmt.Println("Success")
-	// } else {
-	// 	fmt.Printf("Failed patching update head, error body\n %s\n", body)
-	// }
+	payload = fmt.Sprintf("{ \"sha\": %q, \"force\": true }", commitResult.Sha)
+	//payload = fmt.Sprintf("{ \"sha\": %q, \"force\": true }", commitResult.Sha)
+	body = githubRequest("PATCH", "https://api.github.com/repos/rwapps/video_backups/git/refs/heads/master", "200 OK", []byte(payload))
 
 	updateResult := GithubRefResult{}
 	if err := json.Unmarshal(body, &updateResult); err != nil {
@@ -357,8 +301,6 @@ func backupPlaylists(category string, body []byte) {
 }
 
 func getVideos(playlistId, nextPageToken string) []Video {
-
-	fmt.Printf("playlist id %s\n", playlistId)
 	u, err := url.Parse("https://www.googleapis.com/youtube/v3/playlistItems")
 	if err != nil {
 		fmt.Println("couldn't parse api url")
@@ -403,132 +345,89 @@ func getVideos(playlistId, nextPageToken string) []Video {
 }
 
 func getCommitUrl() string {
-  // Get the commit url
-  url := "https://api.github.com/repos/rwapps/video_backups/git/refs/heads/master"
-  body := githubRequest("GET", url, "200 OK", nil)
-  //req, err := http.NewRequest("GET", url, nil)
-  //if err != nil {
-  //  log.Fatal("Cannot make request for current references.")
-  //}
-  //req.Header.Set("Authorization", "token "+config.GithubToken)
+	url := "https://api.github.com/repos/rwapps/video_backups/git/refs/heads/master"
+	body := githubRequest("GET", url, "200 OK", nil)
 
-  //client := &http.Client{}
-  //resp, err := client.Do(req)
-  //if err != nil {
-  //  log.Fatal("Cannot get current references from github.")
-  //}
-  //defer resp.Body.Close()
-  //body, err := ioutil.ReadAll(resp.Body)
-  //if err != nil {
-  //  fmt.Println("failed to readall body")
-  //}
+	refResult := GithubRefResult{}
+	if err := json.Unmarshal(body, &refResult); err != nil {
+		fmt.Printf("failed to decode resp.Body %s\n", err)
+	}
 
-  //if resp.Status != "200 OK" {
-  //  panic(fmt.Sprintf("Failed getting commit references, error body\n %s\n", body))
-  //}
-
-  refResult := GithubRefResult{}
-  if err := json.Unmarshal(body, &refResult); err != nil {
-    fmt.Printf("failed to decode resp.Body %s\n", err)
-  }
-
-  return refResult.Object.Url
+	return refResult.Object.Url
 }
 
 func getTreeUrl(commitUrl string) string {
-  body := githubRequest("GET", commitUrl, "200 OK", nil)
-  //req, err := http.NewRequest("GET", commitUrl, nil)
-  //if err != nil {
-  //  log.Fatal("Cannot make request for tree.")
-  //}
-  //req.Header.Set("Authorization", "token "+config.GithubToken)
+	body := githubRequest("GET", commitUrl, "200 OK", nil)
 
-  //client := &http.Client{}
-  //resp, err := client.Do(req)
-  //if err != nil {
-  //  log.Fatal("Cannot get current references from github.")
-  //}
-  //defer resp.Body.Close()
-  //body, err := ioutil.ReadAll(resp.Body)
-  //if err != nil {
-  //  fmt.Println("failed to readall body")
-  //}
+	commitResult := GithubCommitResult{}
+	if err := json.Unmarshal(body, &commitResult); err != nil {
+		fmt.Printf("failed to decode resp.Body %s\n", err)
+	}
+	parentCommit = commitResult.Parents[0].Sha
 
-  //if resp.Status != "200 OK" {
-  //  panic(fmt.Sprintf("Failed getting tree url, error body\n %s\n", body))
-  //}
-
-  commitResult := GithubCommitResult{}
-  if err := json.Unmarshal(body, &commitResult); err != nil {
-    fmt.Printf("failed to decode resp.Body %s\n", err)
-  }
-  parentCommit = commitResult.Parents[0].Sha
-
-  return commitResult.Tree.Url
+	return commitResult.Tree.Url
 }
 
 func githubRequest(verb, url, status string, input []byte) []byte {
-  req, err := http.NewRequest(verb, url, bytes.NewBuffer(input))
-  if err != nil {
-    log.Fatal("Cannot make request for trees.")
-  }
-  req.Header.Set("Authorization", "token "+config.GithubToken)
+	req, err := http.NewRequest(verb, url, bytes.NewBuffer(input))
+	if err != nil {
+		log.Fatal("Cannot make request for trees.")
+	}
+	req.Header.Set("Authorization", "token "+config.GithubToken)
 
-  client := &http.Client{}
-  resp, err := client.Do(req)
-  if err != nil {
-    log.Fatal("Cannot get trees from github.")
-  }
-  defer resp.Body.Close()
-  body, err := ioutil.ReadAll(resp.Body)
-  if err != nil {
-    fmt.Println("failed to readall body")
-  }
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Fatal("Cannot get trees from github.")
+	}
+	defer resp.Body.Close()
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		fmt.Println("failed to readall body")
+	}
 
-  if resp.Status != status {
-    panic(fmt.Sprintf("Failed getting trees, error body\n %s\n", body))
-  }
+	if resp.Status != status {
+		panic(fmt.Sprintf("Failed status test, error body:\n %s\n", body))
+	}
 
-  return body
+	return body
 }
 
 func setCurrentTree(treeUrl, category string) bool {
-  body := githubRequest("GET", treeUrl, "200 OK", nil)
-  treesResult := GithubTreesResult{}
-  if err := json.Unmarshal(body, &treesResult); err != nil {
-    fmt.Printf("failed to decode resp.Body %s\n", err)
-  }
-  for _, tree := range treesResult.Trees {
-    if tree.Path == category {
-      currentSha = tree.Sha
+	body := githubRequest("GET", treeUrl, "200 OK", nil)
+	treesResult := GithubTreesResult{}
+	if err := json.Unmarshal(body, &treesResult); err != nil {
+		fmt.Printf("failed to decode resp.Body %s\n", err)
+	}
+	currentSha = treesResult.Sha
+	return true
+	//for _, tree := range treesResult.Trees {
+	//  if tree.Path == category {
+	//    currentSha = tree.Sha
 
-      return true
-    }
-  }
+	//    return true
+	//  }
+	//}
 
-  return false
+	//return false
 }
 
 func getRwPlaylists(category string) []byte {
-  urlpath := fmt.Sprintf("http://reliefweb.int/sites/reliefweb.int/files/playlists/%s.json", category)
-  resp, err := http.Get(urlpath)
-  if err != nil {
-    fmt.Println("failed to get url")
-  }
-  defer resp.Body.Close()
-  body, err := ioutil.ReadAll(resp.Body)
-  if err != nil {
-    fmt.Println("failed to readall body")
-  }
+	urlpath := fmt.Sprintf("http://reliefweb.int/sites/reliefweb.int/files/playlists/%s.json", category)
+	resp, err := http.Get(urlpath)
+	if err != nil {
+		fmt.Println("failed to get url")
+	}
+	defer resp.Body.Close()
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		fmt.Println("failed to readall body")
+	}
 
-  return body
-  //err = ioutil.WriteFile(fmt.Sprintf("data/%s/playlists.json", category), body, 0644)
-  //if err != nil {
-  //  fmt.Printf("failed to write file %s\n", err)
-  //}
+	return body
 }
 
-// init read the configuration file and creates the trello client.
+// init read the configuration file
 func init() {
 	// Read configuration.
 	data, err := ioutil.ReadFile("./config/config.json")
@@ -546,33 +445,24 @@ func main() {
 	for _, category := range config.Categories {
 		fmt.Printf("category %v\n", category)
 
-    commitUrl := getCommitUrl()
+		commitUrl := getCommitUrl()
 
-    treeUrl := getTreeUrl(commitUrl)
+		treeUrl := getTreeUrl(commitUrl)
 
-    success := setCurrentTree(treeUrl, category)
-    if !success {
-      fmt.Println("failed getting current tree")
-    }
+		success := setCurrentTree(treeUrl, category)
+		if !success {
+			fmt.Println("failed getting current tree")
+		}
 
-    rwPlaylists := getRwPlaylists(category)
+		rwPlaylists := getRwPlaylists(category)
 
 		if category == "organization" {
-			continue
-			//backupOrgPlaylists(category, body)
+			backupOrgPlaylists(category, rwPlaylists)
 		} else {
 			backupPlaylists(category, rwPlaylists)
 		}
 		//go backupPlaylists(category, body)
-
-		//updateGist("theme", "e0214aefcad4c93249dd026204723e78", body)
-
 	}
-	i := true
-	if i == true {
-		return
-	}
-	commitChanges()
 }
 
 //func updateGist(name string, gistId string, content []byte) {
@@ -724,3 +614,17 @@ func commitChanges() {
 		fmt.Printf("failed to run commands %s\n", err)
 	}
 }
+//func inspect(body []byte) {
+//	var f interface{}
+//	err := json.Unmarshal(body, &f)
+//	if err != nil {
+//		fmt.Println("inspect failed to unmarshal body")
+//	}
+//	m := f.(map[string]interface{})
+//	for k, v := range m {
+//		fmt.Printf("k: %v\n", k)
+//		fmt.Printf("v: %v\n", v)
+//	}
+//
+//}
+
