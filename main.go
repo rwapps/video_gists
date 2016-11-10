@@ -14,86 +14,43 @@ import (
 	"strings"
 )
 
-// Theme: https://gist.github.com/rwapps/41c8a9f38f177fcee358c4758f3f87ea
 
 // Config contains the site configuration.
 type Config struct {
-	//GistToken string `json:"GistToken"`
 	YoutubeApiKey string   `json:"YoutubeApiKey"`
-	Lists         []List   `json:"Lists"`
 	GithubToken   string   `json:"GithubToken"`
 	Categories    []string `json:"Categories"`
 }
 
-type List struct {
-	Name   string `json:"name"`
-	GistId string `json:"gistId"`
-}
-
-var config Config
-
-type Playlist struct {
-	Title      string `json:"title"`
-	Id         string `json:"id"`
-	DefaultImg string `json:"defaultImg"`
-}
-
-// {
-//   "sha": "afb11d8b3cfaa0806bb2237e17fd3604de327e88",
-//   "url": "https://api.github.com/repos/rwapps/video_backups/git/trees/afb11d8b3cfaa0806bb2237e17fd3604de327e88",
-//   "tree": [
-//     {
-//       "path": "country",
-//       "mode": "040000",
-//       "type": "tree",
-//       "sha": "e937c29ac5c10aea13bbea6e20ea06483ad1e25f",
-//       "url": "https://api.github.com/repos/rwapps/video_backups/git/trees/e937c29ac5c10aea13bbea6e20ea06483ad1e25f"
-//     },
-//     {
-//       "path": "organization",
-//       "mode": "040000",
-//       "type": "tree",
-//       "sha": "a6bdbb4b44b125533e131ed1b367a7e8d2842ad2",
-//       "url": "https://api.github.com/repos/rwapps/video_backups/git/trees/a6bdbb4b44b125533e131ed1b367a7e8d2842ad2"
-//     },
-//     {
-//       "path": "topic",
-//       "mode": "040000",
-//       "type": "tree",
-//       "sha": "f06d533e6dceb916bb6f342f734552b3d5d65aa9",
-//       "url": "https://api.github.com/repos/rwapps/video_backups/git/trees/f06d533e6dceb916bb6f342f734552b3d5d65aa9"
-//     }
-//   ],
-//   "truncated": false
-// }
-type CommitTree struct {
-	BaseTree string `json:"base_tree"`
-	Trees    []Tree `json:"tree"`
-}
-
-type Tree struct {
-	Path string `json:"path"`
-	Mode string `json:"mode"`
-	Type string `json:"type"`
-	Sha  string `json:"sha"`
-}
-
+// Github API structures.
 type Url struct {
 	Url string `json:"url"`
-}
-
-type ResultTree struct {
-	Path string `json:"path"`
-	Sha  string `json:"sha"`
 }
 
 type Sha struct {
 	Sha string `json:"sha"`
 }
 
-type GithubTreesResult struct {
-	Sha   string       `json:"sha"`
-	Trees []ResultTree `json:"tree"`
+type GetTrees struct {
+	Sha      string `json:"sha"`
+	Trees    []GetTree `json:"tree"`
+}
+
+type GetTree struct {
+	Sha  string `json:"sha"`
+	Path string `json:"path"`
+}
+
+type CreateTrees struct {
+	BaseTree string `json:"base_tree"`
+	Trees    []CreateTree `json:"tree"`
+}
+
+type CreateTree struct {
+	Path string `json:"path"`
+	Mode string `json:"mode"`
+	Type string `json:"type"`
+	Content string `json:"content"`
 }
 
 type GithubCommitResult struct {
@@ -101,10 +58,16 @@ type GithubCommitResult struct {
 	Parents []Sha `json:"parents"`
 }
 
-type GithubRefResult struct {
-	Object Url `json:"object"`
+type Object struct {
+	Url string    `json:"url"`
+	Sha string    `json:"sha"`
 }
 
+type GithubRefResult struct {
+	Object Object    `json:"object"`
+}
+
+// Youtube
 type YoutubeResult struct {
 	NextPageToken string `json:"nextPageToken"`
 	Items         []Item `json:"items"`
@@ -130,9 +93,12 @@ type Video struct {
 	Id       string `json:"id"`
 }
 
-var videos []Video
-
-var videoList []Item
+// RW
+type Playlist struct {
+	Title      string `json:"title"`
+	Id         string `json:"id"`
+	DefaultImg string `json:"defaultImg"`
+}
 
 type OrgPlaylist struct {
 	Title      string `json:"name"`
@@ -140,29 +106,70 @@ type OrgPlaylist struct {
 	DefaultImg string `json:"thumbnail_url"`
 }
 
-var currentSha string
+var config Config
+var videos []Video
+var videoList []Item
+var commitSha string
+var treeSha string
 
-var parentCommit string
+// This is a little wasteful - we can collect all the changes for each
+// category and update the tree at once.
+func updateTree(path, content string) bool {
+	trees := CreateTrees{}
+	trees.BaseTree = treeSha
+
+  tree := CreateTree{}
+	tree.Type = "blob"
+	tree.Mode = "100644"
+  tree.Content = content
+  tree.Path = path
+  trees.Trees = append(trees.Trees, tree)
+
+	// create a tree, grab the sha
+	treeJson, err := json.Marshal(trees)
+	if err != nil {
+		fmt.Printf("failed to marshal tree %s\n", err)
+	}
+
+	body := githubRequest("POST", "https://api.github.com/repos/rwapps/video_backups/git/trees", "201 Created", treeJson)
+
+	treeResult := Sha{}
+	if err := json.Unmarshal(body, &treeResult); err != nil {
+		fmt.Printf("failed to decode resp.Body %s\n", err)
+	}
+	treeSha = treeResult.Sha
+
+	// New commit grab the sha
+	payload := fmt.Sprintf("{ \"message\": \"updating %s\", \"tree\": %q, \"parents\": [ %q ] }", path, treeSha, commitSha)
+	body = githubRequest("POST", "https://api.github.com/repos/rwapps/video_backups/git/commits", "201 Created", []byte(payload))
+
+	commitShas := Sha{}
+	if err := json.Unmarshal(body, &commitShas); err != nil {
+		fmt.Printf("failed to decode resp.Body %s\n", err)
+	}
+
+	commitSha = commitShas.Sha
+
+	// Update refs
+	payload = fmt.Sprintf("{ \"sha\": %q }", commitSha)
+	body = githubRequest("PATCH", "https://api.github.com/repos/rwapps/video_backups/git/refs/heads/master", "200 OK", []byte(payload))
+
+	updateResult := GithubRefResult{}
+	if err := json.Unmarshal(body, &updateResult); err != nil {
+		fmt.Printf("failed to decode resp.Body %s\n", err)
+	}
+
+  return true
+}
 
 func backupOrgPlaylists(category string, body []byte) {
 
-	tree := CommitTree{}
-	tree.BaseTree = currentSha
-
-	blobTree := Tree{}
-	blobTree.Sha = createBlob(string(body))
-	blobTree.Path = fmt.Sprintf("%s/playlist.json", category)
-	blobTree.Type = "blob"
-	blobTree.Mode = "100644"
-	tree.Trees = append(tree.Trees, blobTree)
-
-	var playlists map[string]OrgPlaylist
-	err := json.Unmarshal(body, &playlists)
-	if err != nil {
-		fmt.Printf("failed to unmarshal body %v\n", body)
-	}
+ 	var playlists map[string]OrgPlaylist
+ 	err := json.Unmarshal(body, &playlists)
+ 	if err != nil {
+ 		fmt.Printf("failed to unmarshal body %v\n", body)
+ 	}
 	for _, p := range playlists {
-		blobTree = Tree{}
 		videoList = videoList[:0]
 		videos = videos[:0]
 		videos = getVideos(p.Id, "")
@@ -175,70 +182,15 @@ func backupOrgPlaylists(category string, body []byte) {
 		if strings.Contains(p.Title, "/") {
 			p.Title = strings.Replace(p.Title, "/", "-", -1)
 		}
-
-		blobTree.Sha = createBlob(output)
-		blobTree.Path = fmt.Sprintf("%s/%s.json", category, p.Title)
-		blobTree.Type = "blob"
-		blobTree.Mode = "100644"
-
-		tree.Trees = append(tree.Trees, blobTree)
+    path := fmt.Sprintf("%s/%s.json", category, p.Title)
+    success := updateTree(path, output)
+    if !success {
+      fmt.Println("failed to update playlist")
+    }
 	}
-	// create a tree, grab the sha
-	treeJson, err := json.Marshal(tree)
-	if err != nil {
-		fmt.Printf("failed to marshal tree %s\n", err)
-	}
-	body = githubRequest("POST", "https://api.github.com/repos/rwapps/video_backups/git/trees", "201 Created", treeJson)
-
-	treeResult := Sha{}
-	if err := json.Unmarshal(body, &treeResult); err != nil {
-		fmt.Printf("failed to decode resp.Body %s\n", err)
-	}
-
-	// New commit
-	payload := fmt.Sprintf("{ \"message\": \"updating %s\", \"tree\": %q, \"parents\": [ %q ] }", category, treeResult.Sha, parentCommit)
-	body = githubRequest("POST", "https://api.github.com/repos/rwapps/video_backups/git/commits", "201 Created", []byte(payload))
-
-	commitResult := Sha{}
-	if err := json.Unmarshal(body, &commitResult); err != nil {
-		fmt.Printf("failed to decode resp.Body %s\n", err)
-	}
-
-	payload = fmt.Sprintf("{ \"sha\": %q, \"force\": true }", commitResult.Sha)
-	body = githubRequest("PATCH", "https://api.github.com/repos/rwapps/video_backups/git/refs/heads/master", "200 OK", []byte(payload))
-
-	updateResult := GithubRefResult{}
-	if err := json.Unmarshal(body, &updateResult); err != nil {
-		fmt.Printf("failed to decode resp.Body %s\n", err)
-	}
-
-	fmt.Printf("updateResult %v\n", updateResult)
-}
-
-func createBlob(content string) string {
-	payload := fmt.Sprintf("{ \"content\": %q, \"encoding\": \"utf-8\" }", content)
-	body := githubRequest("POST", "https://api.github.com/repos/rwapps/video_backups/git/blobs", "201 Created", []byte(payload))
-
-	blobResult := Sha{}
-	if err := json.Unmarshal(body, &blobResult); err != nil {
-		fmt.Printf("failed to decode resp.Body %s\n", err)
-	}
-
-	return blobResult.Sha
 }
 
 func backupPlaylists(category string, body []byte) {
-	// TODO - do this for organizations too
-
-	tree := CommitTree{}
-	tree.BaseTree = currentSha
-
-	blobTree := Tree{}
-	blobTree.Sha = createBlob(string(body))
-	blobTree.Path = fmt.Sprintf("%s/playlist.json", category)
-	blobTree.Type = "blob"
-	blobTree.Mode = "100644"
-	tree.Trees = append(tree.Trees, blobTree)
 
 	var playlists []Playlist
 	err := json.Unmarshal(body, &playlists)
@@ -246,7 +198,6 @@ func backupPlaylists(category string, body []byte) {
 		fmt.Printf("failed to unmarshal body %v\n", body)
 	}
 	for _, p := range playlists {
-		blobTree = Tree{}
 		videoList = videoList[:0]
 		videos = videos[:0]
 		videos = getVideos(p.Id, "")
@@ -259,45 +210,12 @@ func backupPlaylists(category string, body []byte) {
 		if strings.Contains(p.Title, "/") {
 			p.Title = strings.Replace(p.Title, "/", "-", -1)
 		}
-
-		blobTree.Sha = createBlob(output)
-		blobTree.Path = fmt.Sprintf("%s/%s.json", category, p.Title)
-		blobTree.Type = "blob"
-		blobTree.Mode = "100644"
-
-		tree.Trees = append(tree.Trees, blobTree)
+    path := fmt.Sprintf("%s/%s.json", category, p.Title)
+    success := updateTree(path, output)
+    if !success {
+      fmt.Println("failed to update playlist")
+    }
 	}
-	// create a tree, grab the sha
-	treeJson, err := json.Marshal(tree)
-	if err != nil {
-		fmt.Printf("failed to marshal tree %s\n", err)
-	}
-	body = githubRequest("POST", "https://api.github.com/repos/rwapps/video_backups/git/trees", "201 Created", treeJson)
-
-	treeResult := Sha{}
-	if err := json.Unmarshal(body, &treeResult); err != nil {
-		fmt.Printf("failed to decode resp.Body %s\n", err)
-	}
-
-	// New commit
-	payload := fmt.Sprintf("{ \"message\": \"updating %s\", \"tree\": %q, \"parents\": [ %q ] }", category, treeResult.Sha, parentCommit)
-	body = githubRequest("POST", "https://api.github.com/repos/rwapps/video_backups/git/commits", "201 Created", []byte(payload))
-
-	commitResult := Sha{}
-	if err := json.Unmarshal(body, &commitResult); err != nil {
-		fmt.Printf("failed to decode resp.Body %s\n", err)
-	}
-
-	payload = fmt.Sprintf("{ \"sha\": %q, \"force\": true }", commitResult.Sha)
-	//payload = fmt.Sprintf("{ \"sha\": %q, \"force\": true }", commitResult.Sha)
-	body = githubRequest("PATCH", "https://api.github.com/repos/rwapps/video_backups/git/refs/heads/master", "200 OK", []byte(payload))
-
-	updateResult := GithubRefResult{}
-	if err := json.Unmarshal(body, &updateResult); err != nil {
-		fmt.Printf("failed to decode resp.Body %s\n", err)
-	}
-
-	fmt.Printf("updateResult %v\n", updateResult)
 }
 
 func getVideos(playlistId, nextPageToken string) []Video {
@@ -345,31 +263,41 @@ func getVideos(playlistId, nextPageToken string) []Video {
 }
 
 func getCommitUrl() string {
-	url := "https://api.github.com/repos/rwapps/video_backups/git/refs/heads/master"
-	body := githubRequest("GET", url, "200 OK", nil)
+	u := "https://api.github.com/repos/rwapps/video_backups/git/refs/heads/master"
+	body := githubRequest("GET", u, "200 OK", nil)
 
 	refResult := GithubRefResult{}
 	if err := json.Unmarshal(body, &refResult); err != nil {
 		fmt.Printf("failed to decode resp.Body %s\n", err)
 	}
+	commitSha = refResult.Object.Sha
 
 	return refResult.Object.Url
 }
 
 func getTreeUrl(commitUrl string) string {
 	body := githubRequest("GET", commitUrl, "200 OK", nil)
-
 	commitResult := GithubCommitResult{}
 	if err := json.Unmarshal(body, &commitResult); err != nil {
 		fmt.Printf("failed to decode resp.Body %s\n", err)
 	}
-	parentCommit = commitResult.Parents[0].Sha
 
 	return commitResult.Tree.Url
 }
 
-func githubRequest(verb, url, status string, input []byte) []byte {
-	req, err := http.NewRequest(verb, url, bytes.NewBuffer(input))
+func setCurrentTree(treeUrl string) bool {
+	body := githubRequest("GET", treeUrl, "200 OK", nil)
+	treesResult := GetTrees{}
+	if err := json.Unmarshal(body, &treesResult); err != nil {
+		fmt.Printf("failed to decode resp.Body %s\n", err)
+	}
+  treeSha = treesResult.Sha
+
+  return true
+}
+
+func githubRequest(verb, u, status string, input []byte) []byte {
+	req, err := http.NewRequest(verb, u, bytes.NewBuffer(input))
 	if err != nil {
 		log.Fatal("Cannot make request for trees.")
 	}
@@ -393,28 +321,9 @@ func githubRequest(verb, url, status string, input []byte) []byte {
 	return body
 }
 
-func setCurrentTree(treeUrl, category string) bool {
-	body := githubRequest("GET", treeUrl, "200 OK", nil)
-	treesResult := GithubTreesResult{}
-	if err := json.Unmarshal(body, &treesResult); err != nil {
-		fmt.Printf("failed to decode resp.Body %s\n", err)
-	}
-	currentSha = treesResult.Sha
-	return true
-	//for _, tree := range treesResult.Trees {
-	//  if tree.Path == category {
-	//    currentSha = tree.Sha
-
-	//    return true
-	//  }
-	//}
-
-	//return false
-}
-
 func getRwPlaylists(category string) []byte {
-	urlpath := fmt.Sprintf("http://reliefweb.int/sites/reliefweb.int/files/playlists/%s.json", category)
-	resp, err := http.Get(urlpath)
+	u := fmt.Sprintf("http://reliefweb.int/sites/reliefweb.int/files/playlists/%s.json", category)
+	resp, err := http.Get(u)
 	if err != nil {
 		fmt.Println("failed to get url")
 	}
@@ -439,29 +348,34 @@ func init() {
 	if err != nil {
 		log.Fatal("Invalid configuration file.")
 	}
+  commitUrl := getCommitUrl()
+
+  treeUrl := getTreeUrl(commitUrl)
+
+  success := setCurrentTree(treeUrl)
+  if !success {
+    fmt.Println("failed getting current tree")
+  }
 }
 
 func main() {
 	for _, category := range config.Categories {
 		fmt.Printf("category %v\n", category)
 
-		commitUrl := getCommitUrl()
-
-		treeUrl := getTreeUrl(commitUrl)
-
-		success := setCurrentTree(treeUrl, category)
-		if !success {
-			fmt.Println("failed getting current tree")
-		}
-
 		rwPlaylists := getRwPlaylists(category)
+
+    // Save playlist.json file
+    path := fmt.Sprintf("%s/playlist.json", category)
+    success := updateTree(path, string(rwPlaylists))
+    if !success {
+      fmt.Println("failed to update playlists.json")
+    }
 
 		if category == "organization" {
 			backupOrgPlaylists(category, rwPlaylists)
 		} else {
 			backupPlaylists(category, rwPlaylists)
 		}
-		//go backupPlaylists(category, body)
 	}
 }
 
@@ -614,17 +528,45 @@ func commitChanges() {
 		fmt.Printf("failed to run commands %s\n", err)
 	}
 }
-//func inspect(body []byte) {
-//	var f interface{}
-//	err := json.Unmarshal(body, &f)
-//	if err != nil {
-//		fmt.Println("inspect failed to unmarshal body")
-//	}
-//	m := f.(map[string]interface{})
-//	for k, v := range m {
-//		fmt.Printf("k: %v\n", k)
-//		fmt.Printf("v: %v\n", v)
-//	}
-//
+
+func inspect(body []byte) {
+	var f interface{}
+	err := json.Unmarshal(body, &f)
+	if err != nil {
+		fmt.Println("inspect failed to unmarshal body")
+	}
+	m := f.(map[string]interface{})
+	for k, v := range m {
+		fmt.Printf("k: %v\n", k)
+		fmt.Printf("v: %v\n", v)
+	}
+}
+
+// Gist stuff:
+
+// From config:
+//  "GistToken": "1a15aa7a23f899c4b23f4375a0c9ce908cb788f0",
+//  "Lists": [
+//    {
+//      "name": "topic",
+//      "gistId": "e0214aefcad4c93249dd026204723e78",
+//      "RealgistId": "41c8a9f38f177fcee358c4758f3f87ea"
+//    },
+//    {
+//      "name": "country",
+//      "gistId": "65b527a558b",
+//      "RealgistId": "d649065b527a558be67393c25447fe9d"
+//    },
+//    {
+//      "name": "organization",
+//      "gistId": "49065b527",
+//      "RealgistId": "cd7080a7d6ae35cd254bdd8c153abfb7"
+//    }
+//  ],
+// Theme: https://gist.github.com/rwapps/41c8a9f38f177fcee358c4758f3f87ea
+//	Lists         []List   `json:"Lists"`
+//type List struct {
+//	Name   string `json:"name"`
+//	GistId string `json:"gistId"`
 //}
 
