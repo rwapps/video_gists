@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+  "golang.org/x/oauth2"
+  "github.com/google/go-github/github"
 )
 
 
@@ -42,11 +44,6 @@ type TreeEntry struct {
 	Type string `json:"type,omitempty"`
 	Size string `json:"size,omitempty"`
 	Content string `json:"content,omitempty"`
-}
-
-type GithubCommitResult struct {
-	Tree    Url   `json:"tree"`
-	Parents []SHA `json:"parents"`
 }
 
 type GitObject struct {
@@ -102,16 +99,10 @@ var videos []Video
 var videoList []Item
 var commitSHA string
 var treeSHA string
+var client github.Client
 
-// This is a little wasteful - we can collect all the changes for each
-// category and update the tree at once.
-// Takes a path and a piece of content,
-// packages it as a github tree
-// turns that to json
-// sends POST to github api to create a tree
-// uses the result to POST to the github api to create a commit
-// uses the result to PATCH to the github api to update refs.
-
+// TODO: the handling here should be elsewhere
+// make this do one thing - and bundle the trees to streamline.
 func updateTree(path, content string) bool {
 	trees := Tree{}
 	trees.BaseTree = treeSHA
@@ -121,7 +112,15 @@ func updateTree(path, content string) bool {
   tree.Content = content
   tree.Path = path
   trees.Entries = append(trees.Entries, tree)
-	// create a tree, grab the sha
+  treeSHA = createTree(trees)
+	// New commit grab the sha
+	commitSHA = createCommit(path, treeSHA)
+	// Update refs
+  updateRefs(commitSHA)
+  return true
+}
+
+func createTree(trees Tree) string {
 	treeJson, err := json.Marshal(trees)
 	if err != nil {
 		fmt.Printf("failed to marshal tree %s\n", err)
@@ -131,23 +130,26 @@ func updateTree(path, content string) bool {
 	if err := json.Unmarshal(body, &treeResult); err != nil {
 		fmt.Printf("failed to decode resp.Body %s\n", err)
 	}
-	treeSHA = treeResult.SHA
-	// New commit grab the sha
+	return treeResult.SHA
+}
+
+func createCommit(path, treeSHA string) string {
 	payload := fmt.Sprintf("{ \"message\": \"updating %s\", \"tree\": %q, \"parents\": [ %q ] }", path, treeSHA, commitSHA)
-	body = githubRequest("POST", "https://api.github.com/repos/rwapps/video_backups/git/commits", "201 Created", []byte(payload))
+	body := githubRequest("POST", "https://api.github.com/repos/rwapps/video_backups/git/commits", "201 Created", []byte(payload))
 	commitSHAs := SHA{}
 	if err := json.Unmarshal(body, &commitSHAs); err != nil {
 		fmt.Printf("failed to decode resp.Body %s\n", err)
 	}
-	commitSHA = commitSHAs.SHA
-	// Update refs
-	payload = fmt.Sprintf("{ \"sha\": %q }", commitSHA)
-	body = githubRequest("PATCH", "https://api.github.com/repos/rwapps/video_backups/git/refs/heads/master", "200 OK", []byte(payload))
+  return commitSHAs.SHA
+}
+
+func updateRefs(commitSHA string) {
+	payload := fmt.Sprintf("{ \"sha\": %q }", commitSHA)
+	body := githubRequest("PATCH", "https://api.github.com/repos/rwapps/video_backups/git/refs/heads/master", "200 OK", []byte(payload))
 	updateResult := GithubRefResult{}
 	if err := json.Unmarshal(body, &updateResult); err != nil {
 		fmt.Printf("failed to decode resp.Body %s\n", err)
 	}
-  return true
 }
 
 func backupPlaylists(category string, playlists []Playlist) {
@@ -165,6 +167,7 @@ func backupPlaylists(category string, playlists []Playlist) {
 			p.Title = strings.Replace(p.Title, "/", "-", -1)
 		}
     path := fmt.Sprintf("%s/%s.json", category, p.Title)
+    // TODO: don't update every time, create blobs and make a joint commit.
     success := updateTree(path, output)
     if !success {
       fmt.Println("failed to update playlist")
@@ -209,36 +212,6 @@ func getVideos(playlistId, nextPageToken string) []Video {
 		}
 	}
 	return videos
-}
-
-func getCommitUrl() string {
-	u := "https://api.github.com/repos/rwapps/video_backups/git/refs/heads/master"
-	body := githubRequest("GET", u, "200 OK", nil)
-	refResult := GithubRefResult{}
-	if err := json.Unmarshal(body, &refResult); err != nil {
-		fmt.Printf("failed to decode resp.Body %s\n", err)
-	}
-	commitSHA = refResult.Object.SHA
-	return refResult.Object.Url
-}
-
-func getTreeUrl(commitUrl string) string {
-	body := githubRequest("GET", commitUrl, "200 OK", nil)
-	commitResult := GithubCommitResult{}
-	if err := json.Unmarshal(body, &commitResult); err != nil {
-		fmt.Printf("failed to decode resp.Body %s\n", err)
-	}
-	return commitResult.Tree.Url
-}
-
-func setCurrentTree(treeUrl string) bool {
-	body := githubRequest("GET", treeUrl, "200 OK", nil)
-	treesResult := Tree{}
-	if err := json.Unmarshal(body, &treesResult); err != nil {
-		fmt.Printf("failed to decode resp.Body %s\n", err)
-	}
-  treeSHA = treesResult.SHA
-  return true
 }
 
 func githubRequest(verb, u, status string, input []byte) []byte {
@@ -303,9 +276,8 @@ func preparePlaylists(category string, rwPlaylists []byte) []Playlist {
   return playlists
 }
 
-// init read the configuration file
+// init read the configuration file and initialize github SHAs
 func init() {
-	// Read configuration.
 	data, err := ioutil.ReadFile("./config/config.json")
 	if err != nil {
 		log.Fatal("Cannot read configuration file.")
@@ -314,21 +286,35 @@ func init() {
 	if err != nil {
 		log.Fatal("Invalid configuration file.")
 	}
-  commitUrl := getCommitUrl()
-  treeUrl := getTreeUrl(commitUrl)
-  success := setCurrentTree(treeUrl)
-  if !success {
-    fmt.Println("failed getting current tree")
-  }
+  ts := oauth2.StaticTokenSource(
+		&oauth2.Token{AccessToken: config.GithubToken},
+	)
+	tc := oauth2.NewClient(oauth2.NoContext, ts)
+	client := github.NewClient(tc)
+  ref, _, err := client.Git.GetRef("rwapps", "video_backups", "heads/master")
+	if err != nil {
+		log.Fatal("git getref error")
+	}
+	commitSHA = *ref.Object.SHA
+  repoCommit, _, err := client.Repositories.GetCommit("rwapps", "video_backups", commitSHA)
+	if err != nil {
+		log.Fatal("git getcommit error")
+	}
+  treeSHA = *repoCommit.Commit.Tree.SHA
 }
 
 func main() {
+  //i := true
+  //if i {
+  //  return
+  //}
 	for _, category := range config.Categories {
 		fmt.Printf("category %v\n", category)
 		rwPlaylists := getRwPlaylists(category)
     // Save playlist.json file
     path := fmt.Sprintf("%s/playlist.json", category)
     success := updateTree(path, string(rwPlaylists))
+    // TODO: change success for error
     if !success {
       fmt.Println("failed to update playlists.json")
     }
