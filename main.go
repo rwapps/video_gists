@@ -4,15 +4,14 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/google/go-github/github"
+	"golang.org/x/oauth2"
 	"io/ioutil"
 	"log"
 	"net/http"
 	"net/url"
 	"strings"
-  "golang.org/x/oauth2"
-  "github.com/google/go-github/github"
 )
-
 
 // Config contains the site configuration.
 type Config struct {
@@ -32,27 +31,27 @@ type SHA struct {
 }
 
 type Tree struct {
-	BaseTree string `json:"base_tree,omitempty"`
-	SHA      string `json:"sha,omitempty"`
-	Entries    []TreeEntry `json:"tree,omitempty"`
+	BaseTree string      `json:"base_tree,omitempty"`
+	SHA      string      `json:"sha,omitempty"`
+	Entries  []TreeEntry `json:"tree,omitempty"`
 }
 
 type TreeEntry struct {
-	SHA  string `json:"sha,omitempty"`
-	Path string `json:"path,omitempty"`
-	Mode string `json:"mode,omitempty"`
-	Type string `json:"type,omitempty"`
-	Size string `json:"size,omitempty"`
+	SHA     string `json:"sha,omitempty"`
+	Path    string `json:"path,omitempty"`
+	Mode    string `json:"mode,omitempty"`
+	Type    string `json:"type,omitempty"`
+	Size    string `json:"size,omitempty"`
 	Content string `json:"content,omitempty"`
 }
 
 type GitObject struct {
-	Url string    `json:"url"`
-	SHA string    `json:"sha"`
+	Url string `json:"url"`
+	SHA string `json:"sha"`
 }
 
 type GithubRefResult struct {
-	Object GitObject    `json:"object"`
+	Object GitObject `json:"object"`
 }
 
 // Youtube
@@ -106,18 +105,18 @@ var client github.Client
 func updateTree(path, content string) bool {
 	trees := Tree{}
 	trees.BaseTree = treeSHA
-  tree := TreeEntry{}
+	tree := TreeEntry{}
 	tree.Type = "blob"
 	tree.Mode = "100644"
-  tree.Content = content
-  tree.Path = path
-  trees.Entries = append(trees.Entries, tree)
-  treeSHA = createTree(trees)
+	tree.Content = content
+	tree.Path = path
+	trees.Entries = append(trees.Entries, tree)
+	treeSHA = createTree(trees)
 	// New commit grab the sha
 	commitSHA = createCommit(path, treeSHA)
 	// Update refs
-  updateRefs(commitSHA)
-  return true
+	updateRefs(commitSHA)
+	return true
 }
 
 func createTree(trees Tree) string {
@@ -140,7 +139,7 @@ func createCommit(path, treeSHA string) string {
 	if err := json.Unmarshal(body, &commitSHAs); err != nil {
 		fmt.Printf("failed to decode resp.Body %s\n", err)
 	}
-  return commitSHAs.SHA
+	return commitSHAs.SHA
 }
 
 func updateRefs(commitSHA string) {
@@ -166,12 +165,12 @@ func backupPlaylists(category string, playlists []Playlist) {
 		if strings.Contains(p.Title, "/") {
 			p.Title = strings.Replace(p.Title, "/", "-", -1)
 		}
-    path := fmt.Sprintf("%s/%s.json", category, p.Title)
-    // TODO: don't update every time, create blobs and make a joint commit.
-    success := updateTree(path, output)
-    if !success {
-      fmt.Println("failed to update playlist")
-    }
+		path := fmt.Sprintf("%s/%s.json", category, p.Title)
+		// TODO: don't update every time, create blobs and make a joint commit.
+		success := updateTree(path, output)
+		if !success {
+			fmt.Println("failed to update playlist")
+		}
 	}
 }
 
@@ -253,27 +252,27 @@ func getRwPlaylists(category string) []byte {
 }
 
 func preparePlaylists(category string, rwPlaylists []byte) []Playlist {
-  var playlists []Playlist
-  if category == "organization" {
-    var orgPlaylists map[string]OrgPlaylist
-    err := json.Unmarshal(rwPlaylists, &orgPlaylists)
-    if err != nil {
-      fmt.Printf("failed to unmarshal playlists %v\n", rwPlaylists)
-    }
-    for _, p := range orgPlaylists {
-      playlist := Playlist{}
-      playlist.Title = p.Title
-      playlist.Id = p.Id
-      playlist.DefaultImg = p.DefaultImg
-      playlists = append(playlists, playlist)
-    }
-  } else {
-    err := json.Unmarshal(rwPlaylists, &playlists)
-    if err != nil {
-      fmt.Printf("failed to unmarshal playlists %v\n", rwPlaylists)
-    }
-  }
-  return playlists
+	var playlists []Playlist
+	if category == "organization" {
+		var orgPlaylists map[string]OrgPlaylist
+		err := json.Unmarshal(rwPlaylists, &orgPlaylists)
+		if err != nil {
+			fmt.Printf("failed to unmarshal playlists %v\n", rwPlaylists)
+		}
+		for _, p := range orgPlaylists {
+			playlist := Playlist{}
+			playlist.Title = p.Title
+			playlist.Id = p.Id
+			playlist.DefaultImg = p.DefaultImg
+			playlists = append(playlists, playlist)
+		}
+	} else {
+		err := json.Unmarshal(rwPlaylists, &playlists)
+		if err != nil {
+			fmt.Printf("failed to unmarshal playlists %v\n", rwPlaylists)
+		}
+	}
+	return playlists
 }
 
 // init read the configuration file and initialize github SHAs
@@ -286,39 +285,39 @@ func init() {
 	if err != nil {
 		log.Fatal("Invalid configuration file.")
 	}
-  ts := oauth2.StaticTokenSource(
+	ts := oauth2.StaticTokenSource(
 		&oauth2.Token{AccessToken: config.GithubToken},
 	)
 	tc := oauth2.NewClient(oauth2.NoContext, ts)
 	client := github.NewClient(tc)
-  ref, _, err := client.Git.GetRef("rwapps", "video_backups", "heads/master")
+	ref, _, err := client.Git.GetRef("rwapps", "video_backups", "heads/master")
 	if err != nil {
 		log.Fatal("git getref error")
 	}
 	commitSHA = *ref.Object.SHA
-  repoCommit, _, err := client.Repositories.GetCommit("rwapps", "video_backups", commitSHA)
+	repoCommit, _, err := client.Repositories.GetCommit("rwapps", "video_backups", commitSHA)
 	if err != nil {
 		log.Fatal("git getcommit error")
 	}
-  treeSHA = *repoCommit.Commit.Tree.SHA
+	treeSHA = *repoCommit.Commit.Tree.SHA
 }
 
 func main() {
-  //i := true
-  //if i {
-  //  return
-  //}
+	//i := true
+	//if i {
+	//  return
+	//}
 	for _, category := range config.Categories {
 		fmt.Printf("category %v\n", category)
 		rwPlaylists := getRwPlaylists(category)
-    // Save playlist.json file
-    path := fmt.Sprintf("%s/playlist.json", category)
-    success := updateTree(path, string(rwPlaylists))
-    // TODO: change success for error
-    if !success {
-      fmt.Println("failed to update playlists.json")
-    }
-    playlists := preparePlaylists(category, rwPlaylists)
-    backupPlaylists(category, playlists)
+		// Save playlist.json file
+		path := fmt.Sprintf("%s/playlist.json", category)
+		success := updateTree(path, string(rwPlaylists))
+		// TODO: change success for error
+		if !success {
+			fmt.Println("failed to update playlists.json")
+		}
+		playlists := preparePlaylists(category, rwPlaylists)
+		backupPlaylists(category, playlists)
 	}
 }
