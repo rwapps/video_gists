@@ -278,7 +278,7 @@ func preparePlaylists(category string, rwPlaylists []byte) []Playlist {
 
 // init read the configuration file and initialize github SHAs
 func init() {
-	data, err := ioutil.ReadFile("./config/config.json")
+	data, err := ioutil.ReadFile("/go/src/gitlab.com/RWapps/video_gists/config/config.json")
 	if err != nil {
 		log.Fatal("Cannot read configuration file.")
 	}
