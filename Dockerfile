@@ -3,10 +3,10 @@
 FROM golang
 
 # Copy the local package files to the container's workspace.
-ADD . /go/src/gitlab.com/RWapps/video_gists
+ADD . /go/src/github.com/rwapps/video_gists
 
 # Build the twitterbot command and dependencies inside the container.
 RUN go get "github.com/google/go-github/github"
-RUN go install gitlab.com/RWapps/video_gists
+RUN go install github.com/rwapps/video_gists
 
 ENTRYPOINT /go/bin/video_gists
