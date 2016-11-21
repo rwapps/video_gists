@@ -6,6 +6,7 @@ FROM golang
 ADD . /go/src/github.com/rwapps/video_gists
 
 # Build the twitterbot command and dependencies inside the container.
+RUN go get "golang.org/x/oauth2"
 RUN go get "github.com/google/go-github/github"
 RUN go install github.com/rwapps/video_gists
 
