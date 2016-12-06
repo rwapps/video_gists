@@ -160,7 +160,7 @@ func backupPlaylists(category string, playlists []Playlist) {
 		if err != nil {
 			fmt.Printf("failed to marshal videos %s\n", err)
 		}
-		output := fmt.Sprintf("{ \"defaultImg\": %q, \"videos\": %s }", p.DefaultImg, content)
+		output := fmt.Sprintf("{ \"defaultImg\": %s, \"videos\": %s }", p.DefaultImg, content)
 		// Sanitize filenames - stumbled on "Refugees/Migrants Emergency - Europe"
 		if strings.Contains(p.Title, "/") {
 			p.Title = strings.Replace(p.Title, "/", "-", -1)
