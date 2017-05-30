@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+  "context"
 	"encoding/json"
 	"fmt"
 	"github.com/google/go-github/github"
@@ -274,6 +275,7 @@ func preparePlaylists(category string, rwPlaylists []byte) []Playlist {
 
 // init read the configuration file and initialize github SHAs
 func init() {
+  ctx := context.TODO()
 	data, err := ioutil.ReadFile("/go/src/github.com/rwapps/video_gists/config/config.json")
 	if err != nil {
 		log.Fatal("Cannot read configuration file.")
@@ -287,12 +289,12 @@ func init() {
 	)
 	tc := oauth2.NewClient(oauth2.NoContext, ts)
 	client := github.NewClient(tc)
-	ref, _, err := client.Git.GetRef("rwapps", "video_backups", "heads/master")
+	ref, _, err := client.Git.GetRef(ctx, "rwapps", "video_backups", "heads/master")
 	if err != nil {
 		log.Fatal("git getref error")
 	}
 	commitSHA = *ref.Object.SHA
-	repoCommit, _, err := client.Repositories.GetCommit("rwapps", "video_backups", commitSHA)
+	repoCommit, _, err := client.Repositories.GetCommit(ctx, "rwapps", "video_backups", commitSHA)
 	if err != nil {
 		log.Fatal("git getcommit error")
 	}
