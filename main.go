@@ -99,24 +99,25 @@ var videoList []Item
 var commitSHA string
 var treeSHA string
 var client github.Client
+var trees Tree
 
 // TODO: the handling here should be elsewhere
 // make this do one thing - and bundle the trees to streamline.
-func updateTree(path, content string) bool {
-	trees := Tree{}
-	trees.BaseTree = treeSHA
+func addToTree(path, content string) {
 	tree := TreeEntry{}
 	tree.Type = "blob"
 	tree.Mode = "100644"
 	tree.Content = content
 	tree.Path = path
 	trees.Entries = append(trees.Entries, tree)
+}
+
+func commitTrees(trees Tree) {
 	treeSHA = createTree(trees)
 	// New commit grab the sha
-	commitSHA = createCommit(path, treeSHA)
+	commitSHA = createCommit(treeSHA)
 	// Update refs
 	updateRefs(commitSHA)
-	return true
 }
 
 func createTree(trees Tree) string {
@@ -132,8 +133,8 @@ func createTree(trees Tree) string {
 	return treeResult.SHA
 }
 
-func createCommit(path, treeSHA string) string {
-	payload := fmt.Sprintf("{ \"message\": \"updating %s\", \"tree\": %q, \"parents\": [ %q ] }", path, treeSHA, commitSHA)
+func createCommit(treeSHA string) string {
+	payload := fmt.Sprintf("{ \"message\": \"updating playlists\", \"tree\": %q, \"parents\": [ %q ] }", treeSHA, commitSHA)
 	body := githubRequest("POST", "https://api.github.com/repos/rwapps/video_backups/git/commits", "201 Created", []byte(payload))
 	commitSHAs := SHA{}
 	if err := json.Unmarshal(body, &commitSHAs); err != nil {
@@ -166,11 +167,7 @@ func backupPlaylists(category string, playlists []Playlist) {
 			p.Title = strings.Replace(p.Title, "/", "-", -1)
 		}
 		path := fmt.Sprintf("%s/%s.json", category, p.Title)
-		// TODO: don't update every time, create blobs and make a joint commit.
-		success := updateTree(path, output)
-		if !success {
-			fmt.Println("failed to update playlist")
-		}
+		addToTree(path, output)
 	}
 }
 
@@ -300,24 +297,18 @@ func init() {
 		log.Fatal("git getcommit error")
 	}
 	treeSHA = *repoCommit.Commit.Tree.SHA
+	trees.BaseTree = treeSHA
 }
 
 func main() {
-	//i := true
-	//if i {
-	//  return
-	//}
 	for _, category := range config.Categories {
 		fmt.Printf("category %v\n", category)
 		rwPlaylists := getRwPlaylists(category)
-		// Save playlist.json file
 		path := fmt.Sprintf("%s/playlist.json", category)
-		success := updateTree(path, string(rwPlaylists))
-		// TODO: change success for error
-		if !success {
-			fmt.Println("failed to update playlists.json")
-		}
+		addToTree(path, string(rwPlaylists))
+
 		playlists := preparePlaylists(category, rwPlaylists)
 		backupPlaylists(category, playlists)
 	}
+	commitTrees(trees)
 }
