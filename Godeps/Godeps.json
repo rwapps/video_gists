@@ -1,0 +1,27 @@
+{
+	"ImportPath": "github.com/rwapps/video_gists",
+	"GoVersion": "go1.7",
+	"GodepVersion": "v79",
+	"Deps": [
+		{
+			"ImportPath": "github.com/google/go-github/github",
+			"Rev": "ebfec748347a9af6793c723f8859afcd906860fb"
+		},
+		{
+			"ImportPath": "github.com/google/go-querystring/query",
+			"Rev": "53e6ce116135b80d037921a7fdd5138cf32d7a8a"
+		},
+		{
+			"ImportPath": "golang.org/x/net/context",
+			"Rev": "3da985ce5951d99de868be4385f21ea6c2b22f24"
+		},
+		{
+			"ImportPath": "golang.org/x/oauth2",
+			"Rev": "f047394b6d14284165300fd82dad67edb3a4d7f6"
+		},
+		{
+			"ImportPath": "golang.org/x/oauth2/internal",
+			"Rev": "f047394b6d14284165300fd82dad67edb3a4d7f6"
+		}
+	]
+}
