@@ -2,7 +2,7 @@ package main
 
 import (
 	"bytes"
-  "context"
+	"context"
 	"encoding/json"
 	"fmt"
 	"github.com/google/go-github/github"
@@ -11,14 +11,13 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 )
 
 // Config contains the site configuration.
 type Config struct {
-	YoutubeApiKey string   `json:"YoutubeApiKey"`
-	GithubToken   string   `json:"GithubToken"`
-	Categories    []string `json:"Categories"`
+	Categories []string `json:"Categories"`
 }
 
 // Ah: https://godoc.org/github.com/google/go-github/github
@@ -182,7 +181,7 @@ func getVideos(playlistId, nextPageToken string) []Video {
 	q.Set("maxResults", "50")
 	q.Set("fields", "nextPageToken,items/snippet(position,title,resourceId/videoId)")
 	q.Set("playlistId", playlistId)
-	q.Set("key", config.YoutubeApiKey)
+	q.Set("key", os.Getenv("YOUTUBEAPIKEY"))
 	q.Set("pageToken", nextPageToken)
 	u.RawQuery = q.Encode()
 	resp, err := http.Get(u.String())
@@ -216,7 +215,7 @@ func githubRequest(verb, u, status string, input []byte) []byte {
 	if err != nil {
 		log.Fatal("Cannot make request for trees.")
 	}
-	req.Header.Set("Authorization", "token "+config.GithubToken)
+	req.Header.Set("Authorization", "token "+os.Getenv("GITHUBTOKEN"))
 
 	client := &http.Client{}
 	resp, err := client.Do(req)
@@ -275,7 +274,7 @@ func preparePlaylists(category string, rwPlaylists []byte) []Playlist {
 
 // init read the configuration file and initialize github SHAs
 func init() {
-  ctx := context.TODO()
+	ctx := context.TODO()
 	data, err := ioutil.ReadFile("/go/src/github.com/rwapps/video_gists/config/config.json")
 	if err != nil {
 		log.Fatal("Cannot read configuration file.")
@@ -285,7 +284,7 @@ func init() {
 		log.Fatal("Invalid configuration file.")
 	}
 	ts := oauth2.StaticTokenSource(
-		&oauth2.Token{AccessToken: config.GithubToken},
+		&oauth2.Token{AccessToken: os.Getenv("GITHUBTOKEN")},
 	)
 	tc := oauth2.NewClient(oauth2.NoContext, ts)
 	client := github.NewClient(tc)
